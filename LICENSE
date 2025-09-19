@@ -1,0 +1,85 @@
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License
+
+OSV Security Scanner GitHub Action Workflow
+Copyright (c) 2024-2025 [Author Name]
+
+This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
+
+To view a copy of this license, visit http://creativecommons.org/licenses/by-nc-sa/4.0/ or send a letter to Creative Commons, PO Box 1866, Mountain View, CA 94042, USA.
+
+TERMS AND CONDITIONS:
+
+1. DEFINITIONS
+
+"Licensed Material" means the artistic or literary work, database, or other material to which the Licensor applied this Public License.
+
+"Licensed Rights" means the rights granted to You subject to the terms and conditions of this Public License, which are limited to all Copyright and Similar Rights that apply to Your use of the Licensed Material and that the Licensor has authority to license.
+
+"Licensor" means the individual(s) or entity(ies) granting rights under this Public License.
+
+"NonCommercial" means not primarily intended for or directed towards commercial advantage or monetary compensation.
+
+"Share" means to provide material to the public by any means or process that requires permission under the Licensed Rights, such as reproduction, public display, public performance, distribution, dissemination, communication, or importation, and to make material available to the public including in ways that members of the public may access the material from a place and at a time individually chosen by them.
+
+"You" means the individual or entity exercising the Licensed Rights under this Public License.
+
+2. SCOPE
+
+Subject to the terms and conditions of this Public License, the Licensor hereby grants You a worldwide, royalty-free, non-sublicensable, non-exclusive, irrevocable license to exercise the Licensed Rights in the Licensed Material to:
+
+a. reproduce and Share the Licensed Material, in whole or in part, for NonCommercial purposes only; and
+b. produce, reproduce, and Share Adapted Material for NonCommercial purposes only.
+
+3. LICENSE CONDITIONS
+
+Your exercise of the Licensed Rights is expressly made subject to the following conditions:
+
+a. Attribution:
+   - You must give appropriate credit, provide a link to the license, and indicate if changes were made.
+   - You may do so in any reasonable manner, but not in any way that suggests the licensor endorses you or your use.
+
+b. NonCommercial:
+   - You may not use the material for commercial purposes.
+
+c. ShareAlike:
+   - If you remix, transform, or build upon the material, you must distribute your contributions under the same license as the original.
+
+4. COMMERCIAL USE PROHIBITION
+
+The following activities are explicitly prohibited under this license:
+
+- Use by commercial entities for business operations
+- Incorporation into commercial products or services
+- Resale, licensing, or sublicensing for profit
+- Integration into proprietary software solutions for commercial distribution
+- Use in consulting services or professional service offerings
+- Modification for commercial redistribution
+
+5. AUTHOR RIGHTS PROTECTION
+
+All rights are reserved by the original author, including:
+
+- Right to attribution for any use or distribution
+- Protection against unauthorized commercial exploitation
+- Right to enforce license terms and pursue legal remedies for violations
+- Right to grant separate commercial licenses under different terms
+- Right to modify license terms for future versions
+
+6. DISCLAIMER OF WARRANTIES AND LIMITATION OF LIABILITY
+
+Unless otherwise separately undertaken by the Licensor, to the extent possible, the Licensor offers the Licensed Material as-is and as-available, and makes no representations or warranties of any kind concerning the Licensed Material, whether express, implied, statutory, or other.
+
+The Licensor shall not be liable to You on any legal theory (including, without limitation, negligence) or otherwise for any direct, special, indirect, incidental, consequential, punitive, exemplary, or other losses, costs, expenses, or damages arising out of this Public License or use of the Licensed Material.
+
+7. TERMINATION
+
+This Public License applies for the term of the Copyright and Similar Rights licensed here. However, if You fail to comply with this Public License, then Your rights under this Public License terminate automatically.
+
+8. CONTACT FOR COMMERCIAL LICENSING
+
+For commercial licensing inquiries or permissions beyond the scope of this license, please contact the author through the project repository.
+
+---
+
+For the complete and authoritative license text, please visit:
+https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode

@@ -1,0 +1,252 @@
+# OSV Scanner Workflow Examples
+# Copy and customize these examples for your specific use cases
+
+# ================================
+# Example 1: Basic Security Scan
+# ================================
+name: Basic Security Scan
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM
+
+jobs:
+  security-scan:
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_type: 'full'
+      slack_enabled: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+
+---
+
+# ================================
+# Example 2: PR Protection Scan
+# ================================
+name: PR Security Protection
+on:
+  pull_request:
+    paths:
+      - 'package-lock.json'
+      - 'requirements.txt'
+      - 'go.sum'
+      - 'Cargo.lock'
+
+jobs:
+  security-scan:
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_type: 'dependencies-only'
+      severity_threshold: 'high'
+      fail_on_vulnerabilities: true
+      slack_enabled: true
+      upload_reports: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+
+---
+
+# ================================
+# Example 3: Multi-Environment Scan
+# ================================
+name: Multi-Environment Security Scan
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 23 * * 0'  # Weekly on Sunday
+
+jobs:
+  scan-frontend:
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_directory: './frontend'
+      severity_threshold: 'medium'
+      fail_on_vulnerabilities: false
+      slack_enabled: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_FRONTEND }}
+
+  scan-backend:
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_directory: './backend'
+      severity_threshold: 'medium'
+      fail_on_vulnerabilities: false
+      slack_enabled: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_BACKEND }}
+
+---
+
+# ================================
+# Example 4: Critical-Only Scan
+# ================================
+name: Critical Vulnerability Check
+on:
+  push:
+    branches: [main, develop]
+
+jobs:
+  critical-scan:
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_type: 'full'
+      severity_threshold: 'critical'
+      fail_on_vulnerabilities: true
+      slack_enabled: true
+      upload_reports: false  # Only notify, don't upload full reports
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_CRITICAL }}
+
+---
+
+# ================================
+# Example 5: Custom Dependency Paths
+# ================================
+name: Custom Path Security Scan
+on:
+  workflow_dispatch:
+
+jobs:
+  custom-scan:
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_directory: '.'
+      severity_threshold: 'medium'
+      fail_on_vulnerabilities: false
+      slack_enabled: true
+      custom_dependency_paths: '["services/*/package.json", "microservices/*/requirements.txt", "apps/*/Cargo.toml"]'
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+
+---
+
+# ================================
+# Example 6: Release Security Gate
+# ================================
+name: Release Security Gate
+on:
+  release:
+    types: [created]
+
+jobs:
+  pre-release-scan:
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_type: 'full'
+      severity_threshold: 'high'
+      fail_on_vulnerabilities: true
+      slack_enabled: true
+      upload_reports: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_RELEASES }}
+
+  post-scan-actions:
+    needs: pre-release-scan
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Update release notes
+        if: needs.pre-release-scan.outputs.has_vulnerabilities == 'true'
+        run: |
+          echo "Security scan found ${{ needs.pre-release-scan.outputs.total_vulnerabilities }} vulnerabilities"
+          echo "Critical: ${{ needs.pre-release-scan.outputs.critical_vulnerabilities }}"
+          echo "High: ${{ needs.pre-release-scan.outputs.high_vulnerabilities }}"
+
+---
+
+# ================================
+# Example 7: Compliance Reporting
+# ================================
+name: Monthly Security Compliance
+on:
+  schedule:
+    - cron: '0 9 1 * *'  # First day of every month at 9 AM
+
+jobs:
+  compliance-scan:
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_type: 'full'
+      severity_threshold: 'low'  # Include all vulnerabilities for compliance
+      fail_on_vulnerabilities: false
+      slack_enabled: true
+      upload_reports: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_COMPLIANCE }}
+
+  generate-compliance-report:
+    needs: compliance-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download scan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: osv-scan-results-${{ github.run_number }}
+          path: ./scan-results
+
+      - name: Generate compliance summary
+        run: |
+          echo "# Monthly Security Compliance Report" > compliance-report.md
+          echo "**Date:** $(date)" >> compliance-report.md
+          echo "**Total Vulnerabilities:** ${{ needs.compliance-scan.outputs.total_vulnerabilities }}" >> compliance-report.md
+          echo "**Critical:** ${{ needs.compliance-scan.outputs.critical_vulnerabilities }}" >> compliance-report.md
+          echo "**High:** ${{ needs.compliance-scan.outputs.high_vulnerabilities }}" >> compliance-report.md
+          
+      - name: Upload compliance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-report-$(date +%Y-%m)
+          path: compliance-report.md
+
+---
+
+# ================================
+# Example 8: Matrix Strategy Scan
+# ================================
+name: Matrix Security Scan
+on:
+  workflow_dispatch:
+
+jobs:
+  matrix-scan:
+    strategy:
+      matrix:
+        environment: [production, staging, development]
+        include:
+          - environment: production
+            severity_threshold: critical
+            fail_on_vulnerabilities: true
+          - environment: staging
+            severity_threshold: high
+            fail_on_vulnerabilities: true
+          - environment: development
+            severity_threshold: medium
+            fail_on_vulnerabilities: false
+    
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_directory: './environments/${{ matrix.environment }}'
+      severity_threshold: ${{ matrix.severity_threshold }}
+      fail_on_vulnerabilities: ${{ matrix.fail_on_vulnerabilities }}
+      slack_enabled: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}

@@ -1,0 +1,298 @@
+# OSV Scanner GitHub Action Workflow - .gitignore
+
+# ==============================================
+# Security and Sensitive Files
+# ==============================================
+
+# Environment variables and secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Secret files
+secrets.yml
+secrets.yaml
+.secrets/
+credentials.json
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Security scan results (local testing)
+osv-results.json
+osv-results.html
+vulnerability-report.html
+security-scan-*.json
+security-scan-*.html
+
+# Slack tokens and webhooks (if accidentally saved locally)
+slack-token.txt
+webhook-url.txt
+
+# ==============================================
+# OSV Scanner Specific
+# ==============================================
+
+# OSV Scanner output files
+osv-scanner-results/
+*.osv.json
+*.osv.html
+osv-report-*.json
+osv-report-*.html
+
+# Temporary scan files
+temp-scan/
+.osv-scanner/
+osv-cache/
+
+# Debug and test files
+debug-scan.json
+debug_parse.sh
+test-summary.txt
+test_parse.sh
+scan-debug-*.log
+
+# ==============================================
+# GitHub Actions and CI/CD
+# ==============================================
+
+# GitHub Actions artifacts (if downloaded locally)
+artifacts/
+workflow-artifacts/
+
+# Local GitHub CLI cache
+.gh/
+
+# ==============================================
+# Development and IDE Files
+# ==============================================
+
+# Visual Studio Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# JetBrains IDEs
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# ==============================================
+# Operating System Files
+# ==============================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.tmp
+*.temp
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ==============================================
+# Documentation and Build Files
+# ==============================================
+
+# Generated documentation
+docs/_build/
+docs/build/
+site/
+_site/
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Log files
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ==============================================
+# Package Managers and Dependencies
+# ==============================================
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+.pnp
+.pnp.js
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Go
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# ==============================================
+# Testing and Coverage
+# ==============================================
+
+# Test results
+test-results/
+coverage/
+.nyc_output/
+*.lcov
+.coverage
+htmlcov/
+.pytest_cache/
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# ==============================================
+# Temporary and Cache Files
+# ==============================================
+
+# Temporary directories
+tmp/
+temp/
+.tmp/
+.temp/
+
+# Cache directories
+.cache/
+cache/
+.parcel-cache/
+
+# ==============================================
+# Custom Project Specific
+# ==============================================
+
+# Local development configurations
+local-config.yml
+local-config.yaml
+dev-config.json
+
+# Example files that shouldn't be committed
+example-secrets.env
+sample-config-local.yml
+
+# Personal notes and scratch files
+notes.md
+scratch.txt
+todo-personal.md
+
+# Local test repositories
+test-repo/
+sample-app/
+
+# Compressed files (unless specifically needed)
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# ==============================================
+# Keep Important Files
+# ==============================================
+
+# Force include important files that might be ignored by patterns above
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+!.github/workflows/*.yaml
+!examples/
+!examples/*.yml
+!examples/*.yaml
+!images/
+!images/*.png
+!images/*.jpg
+!images/*.gif
+!README.md
+!LICENSE

@@ -1,0 +1,106 @@
+name: Security Vulnerability Scanning
+
+on:
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of scan to run'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - dependencies-only
+  
+  pull_request:
+    paths:
+      - 'package-lock.json'
+      - 'package.json'
+      - '**/package-lock.json'
+      - '**/package.json'
+      - 'yarn.lock'
+      - '**/yarn.lock'
+      - 'requirements.txt'
+      - '**/requirements.txt'
+      - 'Pipfile.lock'
+      - '**/Pipfile.lock'
+      - 'poetry.lock'
+      - '**/poetry.lock'
+      - 'go.sum'
+      - '**/go.sum'
+      - 'go.mod'
+      - '**/go.mod'
+      - 'Cargo.lock'
+      - '**/Cargo.lock'
+      - 'Cargo.toml'
+      - '**/Cargo.toml'
+      - 'composer.lock'
+      - '**/composer.lock'
+      - 'composer.json'
+      - '**/composer.json'
+      - 'Gemfile.lock'
+      - '**/Gemfile.lock'
+      - 'Gemfile'
+      - '**/Gemfile'
+      - 'build.gradle'
+      - '**/build.gradle'
+      - 'build.gradle.kts'
+      - '**/build.gradle.kts'
+      - 'pom.xml'
+      - '**/pom.xml'
+      - 'packages.config'
+      - 'project.assets.json'
+      - 'project.lock.json'
+      - 'packages.lock.json'
+      - 'Package.resolved'
+      - 'Podfile.lock'
+      - 'mix.lock'
+      - 'pubspec.lock'
+  
+  # Daily scan at 8 PM Lebanon time (6 PM UTC)
+  schedule:
+    - cron: '0 18 * * *'
+
+jobs:
+  call-osv-scanner:
+    uses: ./.github/workflows/osv-scanner.yml
+    with:
+      scan_type: ${{ inputs.scan_type || 'full' }}
+      scan_directory: '.'
+      osv_scanner_version: 'latest'
+      severity_threshold: 'medium'
+      fail_on_vulnerabilities: true
+      slack_enabled: true
+      upload_reports: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+      
+  post-scan-actions:
+    needs: call-osv-scanner
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Display scan results
+        run: |
+          echo "## 🔍 Scan Summary"
+          echo "**Status:** ${{ needs.call-osv-scanner.outputs.scan_status }}"
+          echo "**Has Vulnerabilities:** ${{ needs.call-osv-scanner.outputs.has_vulnerabilities }}"
+          echo "**Total Vulnerabilities:** ${{ needs.call-osv-scanner.outputs.total_vulnerabilities }}"
+          echo "**Critical:** ${{ needs.call-osv-scanner.outputs.critical_vulnerabilities }}"
+          echo "**High:** ${{ needs.call-osv-scanner.outputs.high_vulnerabilities }}"
+          
+      - name: Set scan status check
+        if: github.event_name == 'pull_request'
+        run: |
+          STATUS="${{ needs.call-osv-scanner.outputs.scan_status }}"
+          
+          if [ "$STATUS" = "failed" ]; then
+            echo "❌ Security scan failed - blocking PR"
+            exit 1
+          elif [ "$STATUS" = "passed_with_vulnerabilities" ]; then
+            echo "⚠️ Security scan passed with non-critical vulnerabilities"
+          else
+            echo "✅ Security scan passed - no vulnerabilities found"
+          fi

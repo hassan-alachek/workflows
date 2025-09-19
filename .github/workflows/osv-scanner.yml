@@ -1,0 +1,854 @@
+name: OSV Security Scanner
+
+on:
+  workflow_call:
+    inputs:
+      scan_type:
+        description: 'Type of scan to run'
+        required: false
+        default: 'full'
+        type: string
+      scan_directory:
+        description: 'Directory to scan (default: repository root)'
+        required: false
+        default: '.'
+        type: string
+      osv_scanner_version:
+        description: 'OSV Scanner version to use (default: latest)'
+        required: false
+        default: 'latest'
+        type: string
+      severity_threshold:
+        description: 'Minimum severity to report (critical, high, medium, low)'
+        required: false
+        default: 'medium'
+        type: string
+      fail_on_vulnerabilities:
+        description: 'Whether to fail the workflow when vulnerabilities are found'
+        required: false
+        default: true
+        type: boolean
+      slack_enabled:
+        description: 'Enable Slack notifications'
+        required: false
+        default: true
+        type: boolean
+      upload_reports:
+        description: 'Upload HTML and summary reports to Slack'
+        required: false
+        default: true
+        type: boolean
+      custom_dependency_paths:
+        description: 'Custom dependency file paths (JSON array as string)'
+        required: false
+        default: ''
+        type: string
+    secrets:
+      SLACK_WEBHOOK_URL:
+        description: 'Slack webhook URL for notifications'
+        required: false
+      SLACK_BOT_TOKEN:
+        description: 'Slack bot token for file uploads'
+        required: false
+      SLACK_CHANNEL:
+        description: 'Slack channel for notifications'
+        required: false
+    outputs:
+      has_vulnerabilities:
+        description: 'Whether vulnerabilities were found'
+        value: ${{ jobs.vulnerability-scan.outputs.has_vulnerabilities }}
+      total_vulnerabilities:
+        description: 'Total number of vulnerabilities found'
+        value: ${{ jobs.vulnerability-scan.outputs.total_vulns }}
+      critical_vulnerabilities:
+        description: 'Number of critical vulnerabilities'
+        value: ${{ jobs.vulnerability-scan.outputs.critical_vulns }}
+      high_vulnerabilities:
+        description: 'Number of high severity vulnerabilities'
+        value: ${{ jobs.vulnerability-scan.outputs.high_vulns }}
+      scan_status:
+        description: 'Overall scan status (passed/failed)'
+        value: ${{ jobs.vulnerability-scan.outputs.scan_status }}
+
+env:
+  SCAN_OUTPUT_DIR: osv-scan-results
+  HTML_REPORT: osv-scanner-report.html
+  JSON_REPORT: osv-scanner-report.json
+  SUMMARY_FILE: vulnerability-summary.txt
+
+jobs:
+  vulnerability-scan:
+    runs-on: ubuntu-latest
+    outputs:
+      has_vulnerabilities: ${{ steps.osv-scan.outputs.has_vulnerabilities }}
+      total_vulns: ${{ steps.parse-vulns.outputs.total_vulns }}
+      critical_vulns: ${{ steps.parse-vulns.outputs.critical_vulns }}
+      high_vulns: ${{ steps.parse-vulns.outputs.high_vulns }}
+      medium_vulns: ${{ steps.parse-vulns.outputs.medium_vulns }}
+      low_vulns: ${{ steps.parse-vulns.outputs.low_vulns }}
+      should_block_pr: ${{ steps.parse-vulns.outputs.should_block_pr }}
+      scan_status: ${{ steps.determine-status.outputs.status }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup scan environment
+        run: |
+          
+          OUTPUT_DIR="osv-scan-results"
+          mkdir -p "${OUTPUT_DIR}"
+          # Use intermediate variables to prevent injection
+          SCAN_DATE="$(date '+%Y-%m-%d %H:%M:%S UTC')"
+          REPO_NAME="${{ github.repository }}"
+          
+          printf 'SCAN_DATE=%s\n' "${SCAN_DATE}" >> "${GITHUB_ENV}"
+          printf 'REPO_NAME=%s\n' "${REPO_NAME}" >> "${GITHUB_ENV}"
+          
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl zip
+          
+      - name: Install osv-scanner
+        run: |
+          if [ "${{ inputs.osv_scanner_version }}" = "latest" ]; then
+            DOWNLOAD_URL="https://github.com/google/osv-scanner/releases/download/v2.2.2/osv-scanner_linux_amd64"
+          else
+            DOWNLOAD_URL="https://github.com/google/osv-scanner/releases/download/v${{ inputs.osv_scanner_version }}/osv-scanner_linux_amd64"
+          fi
+          
+          curl -LO "$DOWNLOAD_URL"
+          chmod +x osv-scanner_linux_amd64
+          sudo mv osv-scanner_linux_amd64 /usr/local/bin/osv-scanner
+          osv-scanner --version
+          
+      - name: Determine scan context
+        id: scan-context
+        run: |
+          
+          EVENT_NAME="${{ github.event_name }}"
+          EVENT_NUMBER="${{ github.event.number }}"
+          
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            CONTEXT="pr"
+            SCAN_MESSAGE="PR #${EVENT_NUMBER} - Dependency Security Scan"
+          elif [ "${EVENT_NAME}" = "schedule" ]; then
+            CONTEXT="scheduled"
+            SCAN_MESSAGE="Daily Security Scan"
+          else
+            CONTEXT="manual"
+            SCAN_MESSAGE="Manual Security Scan"
+          fi
+          
+          # Write to GITHUB_OUTPUT safely
+          printf 'context=%s\n' "${CONTEXT}" >> "${GITHUB_OUTPUT}"
+          printf 'scan_message=%s\n' "${SCAN_MESSAGE}" >> "${GITHUB_OUTPUT}"
+          
+      - name: Get changed dependency files
+        id: changed-files
+        if: github.event_name == 'pull_request'
+        uses: step-security/changed-files@89030a259c7f36d294c5ad1184fd3ca4a76942de
+        with:
+          files: |
+            package.json
+            package-lock.json
+            **/package.json
+            **/package-lock.json
+            yarn.lock
+            **/yarn.lock
+            requirements.txt
+            **/requirements.txt
+            Pipfile.lock
+            **/Pipfile.lock
+            poetry.lock
+            **/poetry.lock
+            go.sum
+            **/go.sum
+            go.mod
+            **/go.mod
+            Cargo.lock
+            **/Cargo.lock
+            Cargo.toml
+            **/Cargo.toml
+            composer.lock
+            **/composer.lock
+            composer.json
+            **/composer.json
+            Gemfile.lock
+            **/Gemfile.lock
+            Gemfile
+            **/Gemfile
+            build.gradle
+            **/build.gradle
+            build.gradle.kts
+            **/build.gradle.kts
+            pom.xml
+            **/pom.xml
+            packages.config
+            **/packages.config
+            project.assets.json
+            **/project.assets.json
+            
+      - name: Display changed dependency files
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🔍 Dependency files analysis:"
+          
+          
+          ANY_CHANGED="$(printf '%s' "${{ steps.changed-files.outputs.any_changed }}" | head -c 10)"
+          FILES_COUNT="$(printf '%s' "${{ steps.changed-files.outputs.all_changed_files_count }}" | head -c 10)"
+          CHANGED_FILES="$(printf '%s' "${{ steps.changed-files.outputs.all_changed_files }}" | head -c 1000)"
+          
+          echo "📊 Any changed: ${ANY_CHANGED}"
+          echo "📊 Changed files count: ${FILES_COUNT}"
+          
+          if [ "${ANY_CHANGED}" = "true" ]; then
+            echo "📦 Changed dependency files:"
+            echo "${CHANGED_FILES}" | tr ' ' '\n'
+            echo "✅ Found ${FILES_COUNT} changed dependency files"
+          else
+            echo "ℹ️ No dependency files changed in this PR"
+          fi
+
+      - name: Run OSV Scanner
+        id: osv-scan
+        continue-on-error: true
+        run: |
+          echo "🔍 Starting vulnerability scan..."
+          
+          
+          
+          EVENT_NAME="$(printf '%s' "${{ github.event_name }}" | head -c 20)"
+          ANY_CHANGED="$(printf '%s' "${{ steps.changed-files.outputs.any_changed }}" | head -c 10)"
+          SCAN_FILES="$(printf '%s' "${{ steps.changed-files.outputs.all_changed_files }}" | head -c 1000)"
+          SCAN_DIRECTORY="$(printf '%s' "${{ inputs.scan_directory }}" | head -c 100)"
+          
+          # Determine scan scope based on context
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            if [ "${ANY_CHANGED}" = "true" ]; then
+              echo "🎯 PR Mode: Scanning directories containing changed dependency files"
+              echo "📦 Changed files: ${SCAN_FILES}"
+              
+              # For PR mode, scan directories containing the changed files rather than individual files
+              # This ensures osv-scanner can find associated lock files and properly scan dependencies
+              SCAN_DIRS=""
+              # Use read with here-string to safely iterate over files
+              while IFS= read -r file; do
+                # Skip empty lines
+                [ -n "${file}" ] || continue
+                
+                # Get the directory containing the dependency file
+                DIR="$(dirname "${file}")"
+                if [ "${DIR}" = "." ]; then
+                  DIR="."
+                fi
+                
+                # Add directory to scan list if not already included - fix regex operator
+                if ! echo " ${SCAN_DIRS} " | grep -q " ${DIR} "; then
+                  SCAN_DIRS="${SCAN_DIRS} ${DIR}"
+                  echo "📁 Will scan directory: ${DIR} (contains ${file})"
+                fi
+              done <<< "$(echo "${SCAN_FILES}" | tr ' ' '\n')"
+              
+              # Create scan command for directories
+              SCAN_CMD="osv-scanner scan source"
+              for dir in ${SCAN_DIRS}; do
+                SCAN_CMD="${SCAN_CMD} -r ${dir}"
+              done
+            else
+              echo "ℹ️ PR Mode: No dependency files changed, skipping scan"
+              # Write to GITHUB_OUTPUT safely
+              printf 'scan_exit_code=0\n' >> "${GITHUB_OUTPUT}"
+              printf 'has_vulnerabilities=false\n' >> "${GITHUB_OUTPUT}"
+              echo "✅ No dependency changes detected - scan not needed"
+              exit 0
+            fi
+          else
+            echo "🌍 Full Mode: Scanning entire repository"
+            SCAN_CMD="osv-scanner scan source -r ${SCAN_DIRECTORY}"
+          fi
+          
+          
+          
+          OUTPUT_DIR="osv-scan-results"
+          JSON_REPORT="osv-scanner-report.json"
+          HTML_REPORT="osv-scanner-report.html"
+          
+          # Run JSON scan and capture exit code
+          set +e
+          ${SCAN_CMD} --format json --output "${OUTPUT_DIR}/${JSON_REPORT}"
+          SCAN_EXIT_CODE=$?
+          set -e
+          
+          echo "🔍 JSON scan completed with exit code: ${SCAN_EXIT_CODE}"
+          printf 'scan_exit_code=%d\n' "${SCAN_EXIT_CODE}" >> "${GITHUB_OUTPUT}"
+          
+          # Set vulnerability status based on exit code
+          if [ "${SCAN_EXIT_CODE}" -eq 0 ]; then
+            echo "✅ No vulnerabilities found"
+            printf 'has_vulnerabilities=false\n' >> "${GITHUB_OUTPUT}"
+          else
+            echo "⚠️ Vulnerabilities detected (exit code: ${SCAN_EXIT_CODE})"
+            printf 'has_vulnerabilities=true\n' >> "${GITHUB_OUTPUT}"
+          fi
+          
+          # Generate HTML report (don't let this fail the step)
+          set +e
+          ${SCAN_CMD} --format html --output "${OUTPUT_DIR}/${HTML_REPORT}"
+          HTML_EXIT_CODE=$?
+          set -e
+          
+          if [ "${HTML_EXIT_CODE}" -eq 0 ]; then
+            echo "✅ HTML report generated successfully"
+          else
+            echo "⚠️ HTML report generation failed (exit code: ${HTML_EXIT_CODE}), but JSON scan succeeded"
+          fi
+          
+          echo "🔍 Debug - Outputs set:"
+          echo "  - scan_exit_code: ${SCAN_EXIT_CODE}"
+          echo "  - has_vulnerabilities: $([ "${SCAN_EXIT_CODE}" -eq 0 ] && echo 'false' || echo 'true')"
+      - name: Verify OSV scan outputs
+        run: |
+          echo "🔍 Verifying OSV scan outputs:"
+          
+          
+          SCAN_EXIT_CODE="$(printf '%s' "${{ steps.osv-scan.outputs.scan_exit_code }}" | head -c 5)"
+          HAS_VULNS="$(printf '%s' "${{ steps.osv-scan.outputs.has_vulnerabilities }}" | head -c 10)"
+          
+          echo "  - steps.osv-scan.outputs.scan_exit_code: ${SCAN_EXIT_CODE}"
+          echo "  - steps.osv-scan.outputs.has_vulnerabilities: '${HAS_VULNS}'"
+          echo "  - HAS_VULNS variable: '${HAS_VULNS}'"
+          echo "  - Length of HAS_VULNS: ${#HAS_VULNS}"
+          echo "  - Is HAS_VULNS empty? $([ -z "${HAS_VULNS}" ] && echo 'YES' || echo 'NO')"
+          
+      - name: Parse vulnerability results
+        id: parse-vulns
+        if: always()
+        run: |
+          # Create parsing script
+          cat > parse_vulns.sh << 'EOF'
+          #!/bin/bash
+          
+          JSON_FILE="$1"
+          SUMMARY_FILE="$2"
+          
+          if [ ! -f "$JSON_FILE" ]; then
+            echo "No vulnerabilities found" > "$SUMMARY_FILE"
+            # Write to GITHUB_OUTPUT safely
+            {
+              printf 'total_vulns=0\n'
+              printf 'critical_vulns=0\n'
+              printf 'high_vulns=0\n'
+              printf 'medium_vulns=0\n'
+              printf 'low_vulns=0\n'
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          
+          # Extract severity levels and categorize vulnerabilities
+          # Use database_specific.severity when available, fallback to parsing CVSS if needed
+          jq -r '
+            .results[]?.packages[]? | 
+            select(.vulnerabilities | length > 0) | 
+            .vulnerabilities[] | 
+            if (.database_specific.severity // empty) then
+              .database_specific.severity
+            elif (.severity | length > 0) then
+              # Fallback: estimate severity from CVSS vector components
+              .severity[0].score as $cvss |
+              if ($cvss | test("A:H")) then "HIGH"
+              elif ($cvss | test("A:L.*C:H|C:H.*A:L|I:H")) then "HIGH" 
+              elif ($cvss | test("AV:N.*AC:L")) then "MODERATE"
+              else "LOW"
+              end
+            else
+              "UNKNOWN"
+            end
+          ' "$JSON_FILE" > severity_levels.tmp
+          
+          # Count vulnerabilities by severity
+          CRITICAL_COUNT=0
+          HIGH_COUNT=0
+          MEDIUM_COUNT=0
+          LOW_COUNT=0
+          UNKNOWN_COUNT=0
+          TOTAL_COUNT=0
+          
+          while read -r severity; do
+            case "$severity" in
+              "CRITICAL")
+                ((CRITICAL_COUNT++))
+                ;;
+              "HIGH")
+                ((HIGH_COUNT++))
+                ;;
+              "MODERATE"|"MEDIUM")
+                ((MEDIUM_COUNT++))
+                ;;
+              "LOW")
+                ((LOW_COUNT++))
+                ;;
+              *)
+                ((UNKNOWN_COUNT++))
+                ;;
+            esac
+            ((TOTAL_COUNT++))
+          done < severity_levels.tmp
+          
+          # Generate summary
+          echo "🔍 Vulnerability Scan Summary" > "$SUMMARY_FILE"
+          echo "=============================" >> "$SUMMARY_FILE"
+          echo "Total Vulnerabilities: $TOTAL_COUNT" >> "$SUMMARY_FILE"
+          echo "🔴 Critical (9.0-10.0): $CRITICAL_COUNT" >> "$SUMMARY_FILE"
+          echo "🟠 High (7.0-8.9): $HIGH_COUNT" >> "$SUMMARY_FILE"
+          echo "🟡 Medium (4.0-6.9): $MEDIUM_COUNT" >> "$SUMMARY_FILE"
+          echo "🟢 Low (0.1-3.9): $LOW_COUNT" >> "$SUMMARY_FILE"
+          echo "" >> "$SUMMARY_FILE"
+          
+          # Add critical/high vulnerability details
+          if [ $CRITICAL_COUNT -gt 0 ] || [ $HIGH_COUNT -gt 0 ]; then
+            echo "⚠️ HIGH PRIORITY VULNERABILITIES REQUIRING IMMEDIATE ATTENTION:" >> "$SUMMARY_FILE"
+            echo "================================================================" >> "$SUMMARY_FILE"
+            
+            jq -r '
+              .results[]?.packages[]? | 
+              select(.vulnerabilities | length > 0) | 
+              {
+                package: .package.name,
+                version: .package.version,
+                vulns: [
+                  .vulnerabilities[] | 
+                  select(
+                    (.database_specific.severity // "UNKNOWN") as $sev |
+                    $sev == "CRITICAL" or $sev == "HIGH"
+                  ) |
+                  {
+                    id: .id,
+                    summary: .summary,
+                    severity: (.database_specific.severity // "UNKNOWN"),
+                    cvss: (.severity[0].score // "N/A")
+                  }
+                ]
+              } |
+              select(.vulns | length > 0)
+            ' "$JSON_FILE" | jq -r '
+              "📦 Package: \(.package) v\(.version)",
+              (.vulns[] | "  🚨 \(.id): \(.summary)"),
+              "  🔥 Severity: \(.vulns[0].severity)",
+              "  📊 CVSS: \(.vulns[0].cvss)",
+              ""
+            ' >> "$SUMMARY_FILE"
+          fi
+          
+          # Set GitHub outputs safely
+          {
+            printf 'total_vulns=%d\n' "${TOTAL_COUNT}"
+            printf 'critical_vulns=%d\n' "${CRITICAL_COUNT}"
+            printf 'high_vulns=%d\n' "${HIGH_COUNT}"
+            printf 'medium_vulns=%d\n' "${MEDIUM_COUNT}"
+            printf 'low_vulns=%d\n' "${LOW_COUNT}"
+          } >> "${GITHUB_OUTPUT}"
+          
+          # Determine if this should block PR
+          HIGH_PRIORITY_COUNT=$((CRITICAL_COUNT + HIGH_COUNT))
+          if [ "${HIGH_PRIORITY_COUNT}" -gt 0 ]; then
+            printf 'should_block_pr=true\n' >> "${GITHUB_OUTPUT}"
+          else
+            printf 'should_block_pr=false\n' >> "${GITHUB_OUTPUT}"
+          fi
+          
+          rm -f severity_levels.tmp
+          EOF
+          
+          chmod +x parse_vulns.sh
+          
+          
+          OUTPUT_DIR="osv-scan-results"
+          JSON_REPORT="osv-scanner-report.json"
+          SUMMARY_FILE="vulnerability-summary.txt"
+          ./parse_vulns.sh "${OUTPUT_DIR}/${JSON_REPORT}" "${OUTPUT_DIR}/${SUMMARY_FILE}"
+          
+      - name: Display scan results
+        run: |
+          echo "📊 Scan Results:"
+          echo "🔍 Debug Info:"
+          
+          
+          HAS_VULNS="$(printf '%s' "${{ steps.osv-scan.outputs.has_vulnerabilities }}" | head -c 10)"
+          SCAN_EXIT_CODE="$(printf '%s' "${{ steps.osv-scan.outputs.scan_exit_code }}" | head -c 5)"
+          TOTAL_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.total_vulns }}" | head -c 10)"
+          CRITICAL_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.critical_vulns }}" | head -c 10)"
+          HIGH_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.high_vulns }}" | head -c 10)"
+          OUTPUT_DIR="osv-scan-results"
+          JSON_REPORT="osv-scanner-report.json"
+          SUMMARY_FILE="vulnerability-summary.txt"
+          
+          {
+            echo "  - has_vulnerabilities: ${HAS_VULNS}"
+            echo "  - scan_exit_code: ${SCAN_EXIT_CODE}"
+            echo "  - total_vulns: ${TOTAL_VULNS}"
+            echo "  - critical_vulns: ${CRITICAL_VULNS}"
+            echo "  - high_vulns: ${HIGH_VULNS}"
+            echo "  - JSON file exists: $([ -f "${OUTPUT_DIR}/${JSON_REPORT}" ] && echo 'YES' || echo 'NO')"
+            echo "  - Summary file exists: $([ -f "${OUTPUT_DIR}/${SUMMARY_FILE}" ] && echo 'YES' || echo 'NO')"
+            echo ""
+          }
+          
+          if [ -f "${OUTPUT_DIR}/${SUMMARY_FILE}" ]; then
+            cat "${OUTPUT_DIR}/${SUMMARY_FILE}"
+          else
+            echo "❌ Summary file not found"
+            if [ -f "${OUTPUT_DIR}/${JSON_REPORT}" ]; then
+              echo "📄 JSON file exists, showing vulnerability count:"
+              jq '.results[]?.packages[]? | select(.vulnerabilities | length > 0) | .vulnerabilities | length' "${OUTPUT_DIR}/${JSON_REPORT}" | wc -l || echo "Failed to parse JSON"
+            fi
+          fi
+          
+      - name: Prepare Slack notification
+        id: slack-prep
+        run: |
+          
+          CONTEXT="$(printf '%s' "${{ steps.scan-context.outputs.context }}" | head -c 20)"
+          EVENT_NUMBER="$(printf '%s' "${{ github.event.number }}" | head -c 10)"
+          ACTOR="$(printf '%s' "${{ github.actor }}" | head -c 50)"
+          REPOSITORY="$(printf '%s' "${{ github.repository }}" | head -c 100)"
+          ANY_CHANGED="$(printf '%s' "${{ steps.changed-files.outputs.any_changed }}" | head -c 10)"
+          FILES_COUNT="$(printf '%s' "${{ steps.changed-files.outputs.all_changed_files_count }}" | head -c 10)"
+          HAS_VULNS="$(printf '%s' "${{ steps.osv-scan.outputs.has_vulnerabilities }}" | head -c 10)"
+          SHOULD_BLOCK="$(printf '%s' "${{ steps.parse-vulns.outputs.should_block_pr }}" | head -c 10)"
+          TOTAL_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.total_vulns }}" | head -c 10)"
+          CRITICAL_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.critical_vulns }}" | head -c 10)"
+          HIGH_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.high_vulns }}" | head -c 10)"
+          MEDIUM_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.medium_vulns }}" | head -c 10)"
+          LOW_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.low_vulns }}" | head -c 10)"
+          
+          
+          SCAN_DATE="$(date '+%Y-%m-%d %H:%M:%S UTC')"
+          
+          if [ "${CONTEXT}" = "pr" ]; then
+            SLACK_COLOR="warning"
+            SLACK_TITLE="🔍 PR Security Scan - #${EVENT_NUMBER}"
+            if [ "${ANY_CHANGED}" = "true" ]; then
+              SLACK_TEXT="Diff-aware security scan for PR #${EVENT_NUMBER} by ${ACTOR} - Scanned ${FILES_COUNT} changed dependency files"
+            else
+              SLACK_TEXT="PR scan for #${EVENT_NUMBER} - No dependency changes detected"
+            fi
+          elif [ "${CONTEXT}" = "scheduled" ]; then
+            SLACK_COLOR="good"
+            SLACK_TITLE="🕚 Daily Security Scan"
+            SLACK_TEXT="Scheduled daily full repository security scan for ${REPOSITORY}"
+          else
+            SLACK_COLOR="good"
+            SLACK_TITLE="🔍 Manual Security Scan"
+            SLACK_TEXT="Manual full repository security scan triggered by ${ACTOR}"
+          fi
+          
+          if [ "${HAS_VULNS}" = "true" ]; then
+            SLACK_COLOR="danger"
+            if [ "${SHOULD_BLOCK}" = "true" ]; then
+              SLACK_COLOR="danger"
+              SLACK_TITLE="🚨 CRITICAL: ${SLACK_TITLE}"
+            fi
+          fi
+          
+          
+          printf 'slack_color=%s\n' "${SLACK_COLOR}" >> "${GITHUB_OUTPUT}"
+          printf 'slack_title=%s\n' "${SLACK_TITLE}" >> "${GITHUB_OUTPUT}"
+          printf 'slack_text=%s\n' "${SLACK_TEXT}" >> "${GITHUB_OUTPUT}"
+          printf 'scan_date=%s\n' "${SCAN_DATE}" >> "${GITHUB_OUTPUT}"
+          printf 'repository=%s\n' "${REPOSITORY}" >> "${GITHUB_OUTPUT}"
+          printf 'total_vulns=%s\n' "${TOTAL_VULNS:-0}" >> "${GITHUB_OUTPUT}"
+          printf 'critical_vulns=%s\n' "${CRITICAL_VULNS:-0}" >> "${GITHUB_OUTPUT}"
+          printf 'high_vulns=%s\n' "${HIGH_VULNS:-0}" >> "${GITHUB_OUTPUT}"
+          printf 'medium_vulns=%s\n' "${MEDIUM_VULNS:-0}" >> "${GITHUB_OUTPUT}"
+          printf 'low_vulns=%s\n' "${LOW_VULNS:-0}" >> "${GITHUB_OUTPUT}"
+          
+      - name: Send Slack notification
+        uses: rtCamp/action-slack-notify@07cbdbfd6c6190970778d8f98f11d073b2932aae
+        if: inputs.slack_enabled == true
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+          SLACK_USERNAME: 'OSV Scanner Bot'
+          SLACK_ICON_EMOJI: ':shield:'
+          SLACK_COLOR: ${{ steps.slack-prep.outputs.slack_color }}
+          SLACK_TITLE: ${{ steps.slack-prep.outputs.slack_title }}
+          SLACK_MESSAGE: |
+            ${{ steps.slack-prep.outputs.slack_text }}
+            
+            📊 **Scan Results:**
+            • Repository: ${{ steps.slack-prep.outputs.repository }}
+            • Scan Date: ${{ steps.slack-prep.outputs.scan_date }}
+            • Total Vulnerabilities: ${{ steps.slack-prep.outputs.total_vulns }}
+            • 🔴 Critical: ${{ steps.slack-prep.outputs.critical_vulns }}
+            • 🟠 High: ${{ steps.slack-prep.outputs.high_vulns }}
+            • 🟡 Medium: ${{ steps.slack-prep.outputs.medium_vulns }}
+            • 🟢 Low: ${{ steps.slack-prep.outputs.low_vulns }}
+          SLACK_FOOTER: 'OSV Scanner - Powered by GitHub Actions'
+            
+      - name: Upload HTML report to Slack
+        if: |
+          inputs.upload_reports == true && 
+          inputs.slack_enabled == true
+        run: |
+          echo "🔍 HTML Upload Debug Info:"
+          
+          UPLOAD_REPORTS="$(printf '%s' "${{ inputs.upload_reports }}" | head -c 10)"
+          SLACK_ENABLED="$(printf '%s' "${{ inputs.slack_enabled }}" | head -c 10)"
+          HAS_VULNS="$(printf '%s' "${{ steps.osv-scan.outputs.has_vulnerabilities }}" | head -c 10)"
+          TOTAL_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.total_vulns }}" | head -c 10)"
+          OUTPUT_DIR="osv-scan-results"
+          HTML_REPORT="osv-scanner-report.html"
+          BOT_TOKEN="$(printf '%s' "${{ secrets.SLACK_BOT_TOKEN }}" | head -c 100)"
+          SLACK_CHANNEL="$(printf '%s' "${{ secrets.SLACK_CHANNEL }}" | head -c 50)"
+          
+          echo "  - upload_reports: ${UPLOAD_REPORTS}"
+          echo "  - slack_enabled: ${SLACK_ENABLED}"
+          echo "  - has_vulnerabilities: '${HAS_VULNS}'"
+          echo "  - total_vulns: '${TOTAL_VULNS}'"
+          echo "  - HTML file exists: $([ -f "${OUTPUT_DIR}/${HTML_REPORT}" ] && echo 'YES' || echo 'NO')"
+          echo "  - SLACK_BOT_TOKEN exists: $([ -n "${BOT_TOKEN}" ] && echo 'YES' || echo 'NO')"
+          echo "  - SLACK_CHANNEL: '${SLACK_CHANNEL}'"
+          
+          if [ -f "${OUTPUT_DIR}/${HTML_REPORT}" ]; then
+            echo "✅ HTML report file found, proceeding with upload..."
+            
+            
+            CONTEXT="$(printf '%s' "${{ steps.scan-context.outputs.context }}" | head -c 20)"
+            ANY_CHANGED="$(printf '%s' "${{ steps.changed-files.outputs.any_changed }}" | head -c 10)"
+            FILES_COUNT="$(printf '%s' "${{ steps.changed-files.outputs.all_changed_files_count }}" | head -c 10)"
+            EVENT_NUMBER="$(printf '%s' "${{ github.event.number }}" | head -c 10)"
+            REPOSITORY="$(printf '%s' "${{ github.repository }}" | head -c 100)"
+            
+            if [ "${CONTEXT}" = "pr" ]; then
+              if [ "${ANY_CHANGED}" = "true" ]; then
+                COMMENT="🔍 OSV Security Scan Report for PR #${EVENT_NUMBER} (Diff-aware: ${FILES_COUNT} files scanned)"
+              else
+                COMMENT="🔍 OSV Security Scan Report for PR #${EVENT_NUMBER} (No dependency changes)"
+              fi
+            elif [ "${CONTEXT}" = "scheduled" ]; then
+              COMMENT="🕚 Daily OSV Security Scan Report for ${REPOSITORY} (Full repository scan)"
+            else
+              COMMENT="🔍 Manual OSV Security Scan Report for ${REPOSITORY} (Full repository scan)"
+            fi
+            
+            # Add vulnerability info to comment
+            if [ -n "${TOTAL_VULNS}" ] && [ "${TOTAL_VULNS}" != "0" ]; then
+              COMMENT="${COMMENT} - Found ${TOTAL_VULNS} vulnerabilities"
+            else
+              COMMENT="${COMMENT} - No vulnerabilities found"
+            fi
+            
+            if [ -n "${BOT_TOKEN}" ] && [ -n "${SLACK_CHANNEL}" ]; then
+              echo "📤 Creating combined security report package..."
+              
+              # Create a combined ZIP file with both HTML report and summary
+              echo "📤 Compressing HTML report and summary into single ZIP..."
+              cd "${OUTPUT_DIR}"
+              
+              # Create descriptive ZIP filename with repo name and date
+              SUMMARY_FILE="vulnerability-summary.txt"
+              REPO_NAME_CLEAN="$(echo "${REPOSITORY}" | sed 's/\//-/g')"
+              SCAN_DATE_CLEAN="$(date '+%Y%m%d-%H%M%S')"
+              ZIP_FILENAME="osv-security-reports-${REPO_NAME_CLEAN}-${SCAN_DATE_CLEAN}.zip"
+              echo "📦 ZIP filename: ${ZIP_FILENAME}"
+              
+              # Create ZIP with available files
+              if [ -f "${HTML_REPORT}" ] && [ -f "${SUMMARY_FILE}" ]; then
+                zip "${ZIP_FILENAME}" "${HTML_REPORT}" "${SUMMARY_FILE}"
+                echo "✅ Combined ZIP created with both HTML report and summary"
+                UPLOAD_ZIP=true
+              elif [ -f "${HTML_REPORT}" ]; then
+                zip "${ZIP_FILENAME}" "${HTML_REPORT}"
+                echo "⚠️ ZIP created with HTML report only (summary not found)"
+                UPLOAD_ZIP=true
+              else
+                echo "❌ No files to zip - skipping upload"
+                UPLOAD_ZIP=false
+              fi
+              cd ..
+              
+              if [ "$UPLOAD_ZIP" = "true" ]; then
+                # Step 1: Get upload URL for combined ZIP file
+                echo "📤 Step 1: Getting upload URL for combined ZIP file..."
+                
+                # Get ZIP file size
+                FILE_SIZE="$(wc -c < "${OUTPUT_DIR}/${ZIP_FILENAME}")"
+                echo "📤 Combined ZIP file size: $FILE_SIZE bytes"
+                
+                # Upload combined ZIP file to ensure it appears as downloadable attachment
+                echo "📤 Sending request to files.getUploadURLExternal..."
+                UPLOAD_RESPONSE="$(curl -s -X POST \
+                  -H "Authorization: Bearer ${BOT_TOKEN}" \
+                  -F "filename=${ZIP_FILENAME}" \
+                  -F "length=${FILE_SIZE}" \
+                  -F "filetype=zip" \
+                  https://slack.com/api/files.getUploadURLExternal)"
+                
+                echo "📤 Upload URL response: ${UPLOAD_RESPONSE}"
+                
+                # Extract upload URL and file ID
+                UPLOAD_URL="$(echo "${UPLOAD_RESPONSE}" | jq -r '.upload_url // empty')"
+                FILE_ID="$(echo "${UPLOAD_RESPONSE}" | jq -r '.file_id // empty')"
+                
+                if [ -n "${UPLOAD_URL}" ] && [ -n "${FILE_ID}" ]; then
+                  echo "📤 Step 2: Uploading ZIP file to: ${UPLOAD_URL}"
+                  
+                  # Step 2: Upload combined ZIP file to the URL
+                  UPLOAD_FILE_RESPONSE="$(curl -s -X POST \
+                    -F file=@"${OUTPUT_DIR}/${ZIP_FILENAME}" \
+                    "${UPLOAD_URL}")"
+                  
+                  echo "📤 File upload response: ${UPLOAD_FILE_RESPONSE}"
+                  
+                  # Step 3: Complete the upload
+                  echo "📤 Step 3: Completing upload..."
+                  
+                  # Use form data for files.completeUploadExternal - ensure it appears as downloadable attachment
+                  echo "📤 Completing upload with file ID: ${FILE_ID}"
+                  
+                 
+                  FILES_JSON="$(printf '[{"id":"%s","title":"OSV Security Reports Package"}]' "${FILE_ID}")"
+                  
+                  COMPLETE_RESPONSE="$(curl -s -X POST \
+                    -H "Authorization: Bearer ${BOT_TOKEN}" \
+                    -F "files=${FILES_JSON}" \
+                    -F "channel_id=${SLACK_CHANNEL}" \
+                    -F "initial_comment=${COMMENT}" \
+                    https://slack.com/api/files.completeUploadExternal)"
+                  
+                  echo "📤 Complete response: ${COMPLETE_RESPONSE}"
+                  
+                  # Check if upload was successful
+                  if echo "${COMPLETE_RESPONSE}" | jq -r '.ok' | grep -q "true"; then
+                    echo "✅ Combined security reports ZIP uploaded successfully to Slack!"
+                  else
+                    echo "❌ Combined security reports ZIP upload failed:"
+                    echo "${COMPLETE_RESPONSE}" | jq -r '.error // "Unknown error"'
+                  fi
+                else
+                  echo "❌ Failed to get upload URL:"
+                  echo "${UPLOAD_RESPONSE}" | jq -r '.error // "Unknown error"'
+                fi
+              else
+                echo "📤 Skipping ZIP upload - no files available"
+              fi
+            else
+              echo "❌ Skipping file upload - missing SLACK_BOT_TOKEN or SLACK_CHANNEL"
+            fi
+          else
+            echo "❌ HTML report file not found at: ${OUTPUT_DIR}/${HTML_REPORT}"
+            echo "📁 Contents of scan directory:"
+            ls -la "${OUTPUT_DIR}/" || echo "Scan directory doesn't exist"
+          fi
+          
+          
+      - name: Determine final status
+        id: determine-status
+        run: |
+          
+          HAS_VULNS="$(printf '%s' "${{ steps.osv-scan.outputs.has_vulnerabilities }}" | head -c 10)"
+          FAIL_ON_VULNS="$(printf '%s' "${{ inputs.fail_on_vulnerabilities }}" | head -c 10)"
+          SHOULD_BLOCK="$(printf '%s' "${{ steps.parse-vulns.outputs.should_block_pr }}" | head -c 10)"
+          
+          if [ "${HAS_VULNS}" = "true" ]; then
+            if [ "${FAIL_ON_VULNS}" = "true" ] && [ "${SHOULD_BLOCK}" = "true" ]; then
+              printf 'status=failed\n' >> "${GITHUB_OUTPUT}"
+            else
+              printf 'status=passed_with_vulnerabilities\n' >> "${GITHUB_OUTPUT}"
+            fi
+          else
+            printf 'status=passed\n' >> "${GITHUB_OUTPUT}"
+          fi
+          
+      - name: Block PR if critical vulnerabilities found
+        if: |
+          github.event_name == 'pull_request' && 
+          inputs.fail_on_vulnerabilities &&
+          steps.parse-vulns.outputs.should_block_pr == 'true'
+        run: |
+          
+          CRITICAL_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.critical_vulns }}" | head -c 10)"
+          HIGH_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.high_vulns }}" | head -c 10)"
+          
+          echo "🚨 BLOCKING PR: Critical or High severity vulnerabilities detected!"
+          echo "Critical vulnerabilities: ${CRITICAL_VULNS}"
+          echo "High severity vulnerabilities: ${HIGH_VULNS}"
+          echo ""
+          echo "Please review the scan results and address these vulnerabilities before merging."
+          exit 1
+          
+      - name: Upload scan artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: osv-scan-results-${{ github.run_number }}
+          path: osv-scan-results/
+          retention-days: 30
+          
+      - name: Job summary
+        if: always()
+        run: |
+          
+          CONTEXT="$(printf '%s' "${{ steps.scan-context.outputs.context }}" | head -c 20)"
+          REPOSITORY="$(printf '%s' "${{ github.repository }}" | head -c 100)"
+          SCAN_DATE="$(date '+%Y-%m-%d %H:%M:%S UTC')"
+          TOTAL_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.total_vulns }}" | head -c 10)"
+          HAS_VULNS="$(printf '%s' "${{ steps.osv-scan.outputs.has_vulnerabilities }}" | head -c 10)"
+          CRITICAL_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.critical_vulns }}" | head -c 10)"
+          HIGH_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.high_vulns }}" | head -c 10)"
+          MEDIUM_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.medium_vulns }}" | head -c 10)"
+          LOW_VULNS="$(printf '%s' "${{ steps.parse-vulns.outputs.low_vulns }}" | head -c 10)"
+          SHOULD_BLOCK="$(printf '%s' "${{ steps.parse-vulns.outputs.should_block_pr }}" | head -c 10)"
+          SCAN_EXIT_CODE="$(printf '%s' "${{ steps.osv-scan.outputs.scan_exit_code }}" | head -c 5)"
+          OUTPUT_DIR="osv-scan-results"
+          JSON_REPORT="osv-scanner-report.json"
+          
+          {
+            echo "## 🔍 OSV Security Scan Results"
+            echo ""
+            echo "**Scan Context:** ${CONTEXT}"
+            echo "**Repository:** ${REPOSITORY}"
+            echo "**Scan Date:** ${SCAN_DATE}"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          
+          if [ "${HAS_VULNS}" = "true" ] && [ -n "${TOTAL_VULNS}" ] && [ "${TOTAL_VULNS}" != "0" ]; then
+            {
+              echo "### 📊 Vulnerability Summary"
+              echo "- **Total:** ${TOTAL_VULNS}"
+              echo "- **🔴 Critical:** ${CRITICAL_VULNS}"
+              echo "- **🟠 High:** ${HIGH_VULNS}"
+              echo "- **🟡 Medium:** ${MEDIUM_VULNS}"
+              echo "- **🟢 Low:** ${LOW_VULNS}"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            
+            if [ "${SHOULD_BLOCK}" = "true" ]; then
+              {
+                echo "### 🚨 Action Required"
+                echo "**Critical or High severity vulnerabilities detected!**"
+                echo "Please review and address these vulnerabilities."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          elif [ "${HAS_VULNS}" = "true" ] && [ -f "${OUTPUT_DIR}/${JSON_REPORT}" ]; then
+            {
+              echo "### ⚠️ Scan Parsing Issue"
+              echo "Vulnerabilities were detected but parsing failed. Please check the artifacts for details."
+              echo "- **Scan Status:** Vulnerabilities found (exit code: ${SCAN_EXIT_CODE})"
+              echo "- **Parsed Total:** ${TOTAL_VULNS:-'parsing failed'}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### ✅ No Vulnerabilities Detected"
+              echo "Great job! No known vulnerabilities found in your dependencies."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          
+          {
+            echo ""
+            echo "📎 **Artifacts:** Scan results have been uploaded and are available for download."
+          } >> "$GITHUB_STEP_SUMMARY"
